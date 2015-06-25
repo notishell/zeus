@@ -29,7 +29,7 @@ Elf32_Shdr *zeus_elf32_get_shdr(struct zeus_elf_file *);
 
 Elf32_Phdr *zeus_elf32_get_phdr(struct zeus_elf_file *);
 
-int zeus_elf32_recovery(struct zeus_elf_file *, const char *);
+int zeus_elf32_repair(struct zeus_elf_file *, const char *);
 
 void zeus_elf_close(struct zeus_elf_file *);
 

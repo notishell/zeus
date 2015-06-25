@@ -17,23 +17,47 @@
 #include <zeus/zeus.h>
 
 #include <fcntl.h>
+#include <stdio.h>
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-struct zeus_elf_file {
-	int fd;
-	int buff_size;
-	char *buff;
-	int save_buff_size;
-	char *save_buff;
+
+enum {
+	STATUS_INIT 		= 0,
+	STATUS_READY 		= 1,
+	STATUS_DESTROY 		= 2,
+};
+
+struct zeus_elf32_file {
 	Elf32_Ehdr *pEhdr;
 	Elf32_Shdr *pShdr;
 	Elf32_Phdr *pPhdr;
 };
 
+struct zeus_elf64_file {
+	Elf32_Ehdr *pEhdr;
+	Elf32_Shdr *pShdr;
+	Elf32_Phdr *pPhdr;
+};
+
+struct zeus_elf_file {
+	int status;
+	int fd;
+	int buff_size;
+	char *buff;
+	int save_buff_size;
+	char *save_buff;
+	union {
+		struct zeus_elf32_file elf32;
+		struct zeus_elf64_file elf64;
+	} elf;
+};
+
 void zeus_elf_close(struct zeus_elf_file *file) {
 	if (file) {
+		file->status = STATUS_DESTROY;
 		if (file->buff) {
 			free(file->buff);
 		}
@@ -56,6 +80,7 @@ struct zeus_elf_file *zeus_elf_open(const char *path) {
 		goto bail;
 	}
 	memset(file, 0, sizeof(struct zeus_elf_file));
+	file->status = STATUS_INIT;
 
 	file->fd = open(path, O_BINARY | O_RDONLY);
 	if (file->fd < 0) {
@@ -80,6 +105,7 @@ struct zeus_elf_file *zeus_elf_open(const char *path) {
 	file->pPhdr = (Elf32_Phdr *)(file->buff + file->pEhdr->e_phoff);
 
 	ret = 0;
+	file->status = STATUS_READY;
 
 bail:
 	if (ret != 0) {
@@ -90,17 +116,110 @@ bail:
 }
 
 Elf32_Ehdr *zeus_elf32_get_ehdr(struct zeus_elf_file *file) {
+	if (file->status != STATUS_READY) {
+		return (0);
+	}
 	return (file->pEhdr);
 }
 
 Elf32_Shdr *zeus_elf32_get_shdr(struct zeus_elf_file *file) {
+	if (file->status != STATUS_READY) {
+		return (0);
+	}
 	return (file->pShdr);
 }
 
 Elf32_Phdr *zeus_elf32_get_phdr(struct zeus_elf_file *file) {
+	if (file->status != STATUS_READY) {
+		return (0);
+	}
 	return (file->pPhdr);
 }
 
-int zeus_elf32_recovery(struct zeus_elf_file *file, const char *path) {
-	return (0);
+void elf32_repair_section(struct zeus_elf_file *file) {
+	int i;
+	Elf32_Ehdr *pEhdr;
+	Elf32_Shdr *pShdr;
+	Elf32_Phdr *pPhdr, *pDynHdr = 0;
+	Elf32_Dyn *pDyn;
+	Elf32_Word	strSize;
+	Elf32_Addr	strPptr;
+
+	pEhdr = zeus_elf32_get_ehdr(file);
+	pPhdr = zeus_elf32_get_phdr(file);
+
+	for (i = 0; i < pEhdr->e_phnum; i++) {
+		if (pPhdr[i].p_type == PT_DYNAMIC) {
+			pDynHdr = &pPhdr[i];
+			break;
+		}
+	}
+
+	if (!pDynHdr) {
+		return;
+	}
+
+	pDyn = (Elf32_Dyn *)(file->buff + pDynHdr->p_offset);
+	for (i = 0; pDyn[i].d_tag != DT_NULL; i++) {
+		switch (pDyn[i].d_tag) {
+		case DT_STRTAB:
+			strPptr = pDyn[i].d_un.d_ptr;
+			break;
+		case DT_STRSZ:
+			strSize = pDyn[i].d_un.d_val;
+			break;
+		default:
+			break;
+		}
+	}
+
+	pShdr = zeus_elf32_get_shdr(file);
+	for (i = 0; i < pEhdr->e_shnum; i++) {
+		if (pShdr[i].sh_type == SHT_DYNAMIC) {
+			pShdr[i].sh_addr = pDynHdr->p_vaddr;
+			pShdr[i].sh_offset = pDynHdr->p_offset;
+			pShdr[i].sh_size = pDynHdr->p_filesz;
+		} else if (pShdr[i].sh_type == SHT_STRTAB) {
+			pShdr[i].sh_addr = strPptr;
+			pShdr[i].sh_offset = strPptr;
+			pShdr[i].sh_size = strSize;
+		}
+	}
+}
+
+int zeus_elf32_repair(struct zeus_elf_file *file, const char *path) {
+	int fd, ret = 0;
+
+	if (file->status != STATUS_READY) {
+		return (-1);
+	}
+
+	if (file->save_buff_size < file->buff_size) {
+		if (file->save_buff) {
+			free(file->save_buff);
+		}
+		file->save_buff_size = 0;
+	}
+
+	file->save_buff = (char *)malloc(file->buff_size);
+	if (!file->save_buff) {
+		return (-2);
+	}
+	file->save_buff_size = file->buff_size;
+	memcpy(file->save_buff, file->buff, file->buff_size);
+
+	elf32_repair_section(file);
+
+	fd = open(path, O_WRONLY | O_BINARY | O_CREAT);
+	if (fd > 0) {
+		if (write(fd, file->buff, file->buff_size) != file->buff_size) {
+		    fprintf(stderr, "ERROR: write file failed (%s)\n", strerror(errno));
+			ret = -3;
+		}
+		close(fd);
+	}
+
+	memcpy(file->buff, file->save_buff, file->buff_size);
+
+	return (ret);
 }

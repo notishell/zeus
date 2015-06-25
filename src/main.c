@@ -36,6 +36,8 @@ struct Options {
 	int show_section_index;
 	int show_program_header;
 	int show_program_index;
+	int repair_elf;
+	const char *save_repair_output;
 };
 
 struct Options gOptions;
@@ -279,9 +281,9 @@ void elf32_dump_shdr(Elf32_Ehdr *pEhdr, Elf32_Shdr *pShdr) {
 	printf("   No  Name         Type      Flags  Addr     Off    Size   ES  Lk Inf Al\n");
 	printf("  -------------------------------------------------------------------------------\n");
 	for (i = 0; i < pEhdr->e_shnum; i++) {
-		printf("  [%2d] %-12s %-8s %-12s %08x %08x %06x % 4d % 4d %04x %04x\n",
+		printf("  [%2d] %-12d %-8s %-12s %08x %08x %06x % 4d % 4d %04x %04x\n",
 			i,
-			elf_shdr_name(pShdr[i].sh_name),
+			pShdr[i].sh_name,//elf_shdr_name(),
 			elf_shdr_type(pShdr[i].sh_type),
 			elf_shdr_flag(pShdr[i].sh_flags),
 			pShdr[i].sh_addr,
@@ -585,24 +587,28 @@ void elf32_dump_phdr_with_index(Elf32_Ehdr *pEhdr, Elf32_Phdr *pPhdr, int idx) {
 	}
 }
 
-int read_elf(const char *file) {
+int process_elf(const char *file) {
 	Elf32_Ehdr *pEhdr;
 	struct zeus_elf_file *elf;
 
 	elf = zeus_elf_open(file);
 	if (elf) {
-		pEhdr = zeus_elf32_get_ehdr(elf);
-		if (gOptions.show_elf_header) {
-			elf32_dump_ehdr(pEhdr);
-		}
-		if (gOptions.show_section_header) {
-			elf32_dump_shdr(pEhdr, zeus_elf32_get_shdr(elf));
-		}
-		if (gOptions.show_program_header) {
-			if (gOptions.show_program_index == -1) {
-				elf32_dump_phdr(pEhdr, zeus_elf32_get_phdr(elf));
-			} else {
-				elf32_dump_phdr_with_index(pEhdr, zeus_elf32_get_phdr(elf), gOptions.show_program_index);
+		if (gOptions.repair_elf) {
+			zeus_elf32_repair(elf, gOptions.save_repair_output);
+		} else {
+			pEhdr = zeus_elf32_get_ehdr(elf);
+			if (gOptions.show_elf_header) {
+				elf32_dump_ehdr(pEhdr);
+			}
+			if (gOptions.show_section_header) {
+				elf32_dump_shdr(pEhdr, zeus_elf32_get_shdr(elf));
+			}
+			if (gOptions.show_program_header) {
+				if (gOptions.show_program_index == -1) {
+					elf32_dump_phdr(pEhdr, zeus_elf32_get_phdr(elf));
+				} else {
+					elf32_dump_phdr_with_index(pEhdr, zeus_elf32_get_phdr(elf), gOptions.show_program_index);
+				}
 			}
 		}
 		zeus_elf_close(elf);
@@ -614,7 +620,7 @@ int read_elf(const char *file) {
 	return (0);
 }
 
-static const char *short_opts = "hesS:pP:";
+static const char *short_opts = "hesS:pP:r:";
 
 struct option long_opts[] = {
 	{"help", no_argument, NULL, 'h'},
@@ -623,6 +629,7 @@ struct option long_opts[] = {
 	{"section-index", required_argument, NULL, 'S'},
 	{"program", no_argument, NULL, 'p'},
 	{"program-index", required_argument, NULL, 'P'},
+	{"repair", required_argument, NULL, 'r'},
 	{0, 0, 0, 0},
 };
 
@@ -637,6 +644,7 @@ void show_usage() {
     fprintf(stderr, "   -S, --section-index : show section header\n");
     fprintf(stderr, "   -p, --program : show program header\n");
     fprintf(stderr, "   -P, --program-index : show program header\n");
+    fprintf(stderr, "   -r, --repair : repair elf\n");
 }
 
 int main (int argc, char* const argv[]) {
@@ -674,6 +682,10 @@ int main (int argc, char* const argv[]) {
             	gOptions.show_program_index = atoi(optarg);
             }
             break;
+        case 'r':
+            gOptions.repair_elf = 1;
+            gOptions.save_repair_output = optarg;
+            break;
         default:
             break;
         }
@@ -689,5 +701,5 @@ int main (int argc, char* const argv[]) {
         return (2);
     }
 
-	return (read_elf(argv[optind]));
+	return (process_elf(argv[optind]));
 }
