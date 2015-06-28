@@ -14,7 +14,12 @@
  *
  * author: Notis Hell (notishell@gmail.com)
  */
+
 #include <zeus/zeus.h>
+
+#include <sys/elf_common.h>
+#include <sys/elf32.h>
+#include <sys/elf64.h>
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -30,6 +35,11 @@ enum {
 	STATUS_DESTROY 		= 2,
 };
 
+enum {
+	TYPE_ELF32			= 1,
+	TYPE_ELF64			= 2,
+};
+
 struct zeus_elf32_file {
 	Elf32_Ehdr *pEhdr;
 	Elf32_Shdr *pShdr;
@@ -37,18 +47,21 @@ struct zeus_elf32_file {
 };
 
 struct zeus_elf64_file {
-	Elf32_Ehdr *pEhdr;
-	Elf32_Shdr *pShdr;
-	Elf32_Phdr *pPhdr;
+	Elf64_Ehdr *pEhdr;
+	Elf64_Shdr *pShdr;
+	Elf64_Phdr *pPhdr;
 };
 
 struct zeus_elf_file {
 	int status;
 	int fd;
-	int buff_size;
+
 	char *buff;
-	int save_buff_size;
+	int buff_size;
 	char *save_buff;
+	int save_buff_size;
+
+	int type;
 	union {
 		struct zeus_elf32_file elf32;
 		struct zeus_elf64_file elf64;
@@ -58,22 +71,52 @@ struct zeus_elf_file {
 void zeus_elf_close(struct zeus_elf_file *file) {
 	if (file) {
 		file->status = STATUS_DESTROY;
+
 		if (file->buff) {
 			free(file->buff);
 		}
+
+		if (file->save_buff) {
+			free(file->save_buff);
+		}
+
 		if (file->fd > 0) {
 			close(file->fd);
 		}
+
 		if (file) {
 			free(file);
 		}
 	}
 }
 
+void zeus_elf32_init(struct zeus_elf_file *file) {
+	Elf32_Ehdr *pEhdr;
+
+	pEhdr = (Elf32_Ehdr *)file->buff;
+	file->elf.elf32.pEhdr = pEhdr;
+	file->elf.elf32.pShdr = (Elf32_Shdr *)(file->buff + pEhdr->e_shoff);
+	file->elf.elf32.pPhdr = (Elf32_Phdr *)(file->buff + pEhdr->e_phoff);
+}
+
+void zeus_elf64_init(struct zeus_elf_file *file) {
+	Elf64_Ehdr *pEhdr;
+
+	pEhdr = (Elf64_Ehdr *)file->buff;
+	file->elf.elf64.pEhdr = pEhdr;
+	file->elf.elf64.pShdr = (Elf64_Shdr *)(file->buff + pEhdr->e_shoff);
+	file->elf.elf64.pPhdr = (Elf64_Phdr *)(file->buff + pEhdr->e_phoff);
+}
+
+unsigned char zeus_elf_class(struct zeus_elf_file *file) {
+	return (file->elf.elf32.pEhdr->e_ident[EI_CLASS]);
+}
+
 struct zeus_elf_file *zeus_elf_open(const char *path) {
 	int ret = -1;
     off_t start, end;
 	struct zeus_elf_file *file;
+	Elf32_Ehdr *pEhdr;
 
 	file = (struct zeus_elf_file *)malloc(sizeof(struct zeus_elf_file));
 	if (!file) {
@@ -100,9 +143,25 @@ struct zeus_elf_file *zeus_elf_open(const char *path) {
 	if (read(file->fd, file->buff, file->buff_size) != file->buff_size) {
 		goto bail;
 	}
-	file->pEhdr = (Elf32_Ehdr *)file->buff;
-	file->pShdr = (Elf32_Shdr *)(file->buff + file->pEhdr->e_shoff);
-	file->pPhdr = (Elf32_Phdr *)(file->buff + file->pEhdr->e_phoff);
+
+	pEhdr = (Elf32_Ehdr *)file->buff;
+	if (!IS_ELF(*pEhdr)) {
+		goto bail;
+	}
+
+	switch (pEhdr->e_ident[EI_CLASS]) {
+	case ELFCLASS32:
+		file->type = TYPE_ELF32;
+		zeus_elf32_init(file);
+		break;
+	case ELFCLASS64:
+		file->type = TYPE_ELF64;
+		zeus_elf64_init(file);
+		break;
+	case ELFCLASSNONE:
+	default:
+		goto bail;
+	}
 
 	ret = 0;
 	file->status = STATUS_READY;
@@ -119,24 +178,24 @@ Elf32_Ehdr *zeus_elf32_get_ehdr(struct zeus_elf_file *file) {
 	if (file->status != STATUS_READY) {
 		return (0);
 	}
-	return (file->pEhdr);
+	return (file->elf.elf32.pEhdr);
 }
 
 Elf32_Shdr *zeus_elf32_get_shdr(struct zeus_elf_file *file) {
 	if (file->status != STATUS_READY) {
 		return (0);
 	}
-	return (file->pShdr);
+	return (file->elf.elf32.pShdr);
 }
 
 Elf32_Phdr *zeus_elf32_get_phdr(struct zeus_elf_file *file) {
 	if (file->status != STATUS_READY) {
 		return (0);
 	}
-	return (file->pPhdr);
+	return (file->elf.elf32.pPhdr);
 }
 
-void elf32_repair_section(struct zeus_elf_file *file) {
+void zeus_elf32_repair_section(struct zeus_elf_file *file) {
 	int i;
 	Elf32_Ehdr *pEhdr;
 	Elf32_Shdr *pShdr;
@@ -187,7 +246,7 @@ void elf32_repair_section(struct zeus_elf_file *file) {
 	}
 }
 
-int zeus_elf32_repair(struct zeus_elf_file *file, const char *path) {
+int zeus_elf_repair(struct zeus_elf_file *file, const char *path) {
 	int fd, ret = 0;
 
 	if (file->status != STATUS_READY) {
@@ -208,7 +267,13 @@ int zeus_elf32_repair(struct zeus_elf_file *file, const char *path) {
 	file->save_buff_size = file->buff_size;
 	memcpy(file->save_buff, file->buff, file->buff_size);
 
-	elf32_repair_section(file);
+	switch (zeus_elf_class(file)) {
+	case ELFCLASS32:
+		zeus_elf32_repair_section(file);
+		break;
+	case ELFCLASS64:
+		break;
+	}
 
 	fd = open(path, O_WRONLY | O_BINARY | O_CREAT);
 	if (fd > 0) {

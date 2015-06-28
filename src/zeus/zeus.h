@@ -23,13 +23,21 @@ struct zeus_elf_file;
 
 struct zeus_elf_file *zeus_elf_open(const char *);
 
+unsigned char zeus_elf_class(struct zeus_elf_file *);
+
 Elf32_Ehdr *zeus_elf32_get_ehdr(struct zeus_elf_file *);
 
 Elf32_Shdr *zeus_elf32_get_shdr(struct zeus_elf_file *);
 
 Elf32_Phdr *zeus_elf32_get_phdr(struct zeus_elf_file *);
 
-int zeus_elf32_repair(struct zeus_elf_file *, const char *);
+int zeus_elf_repair(struct zeus_elf_file *, const char *);
+
+Elf64_Ehdr *zeus_elf64_get_ehdr(struct zeus_elf_file *);
+
+Elf64_Shdr *zeus_elf64_get_shdr(struct zeus_elf_file *);
+
+Elf64_Phdr *zeus_elf64_get_phdr(struct zeus_elf_file *);
 
 void zeus_elf_close(struct zeus_elf_file *);
 

@@ -587,28 +587,44 @@ void elf32_dump_phdr_with_index(Elf32_Ehdr *pEhdr, Elf32_Phdr *pPhdr, int idx) {
 	}
 }
 
-int process_elf(const char *file) {
+void process_elf32(struct zeus_elf_file *elf) {
 	Elf32_Ehdr *pEhdr;
+
+	pEhdr = zeus_elf32_get_ehdr(elf);
+	if (gOptions.show_elf_header) {
+		elf32_dump_ehdr(pEhdr);
+	}
+	if (gOptions.show_section_header) {
+		elf32_dump_shdr(pEhdr, zeus_elf32_get_shdr(elf));
+	}
+	if (gOptions.show_program_header) {
+		if (gOptions.show_program_index == -1) {
+			elf32_dump_phdr(pEhdr, zeus_elf32_get_phdr(elf));
+		} else {
+			elf32_dump_phdr_with_index(pEhdr, zeus_elf32_get_phdr(elf), gOptions.show_program_index);
+		}
+	}
+}
+
+void process_elf64(struct zeus_elf_file *elf) {
+
+}
+
+int process_elf(const char *file) {
 	struct zeus_elf_file *elf;
 
 	elf = zeus_elf_open(file);
 	if (elf) {
 		if (gOptions.repair_elf) {
-			zeus_elf32_repair(elf, gOptions.save_repair_output);
+			zeus_elf_repair(elf, gOptions.save_repair_output);
 		} else {
-			pEhdr = zeus_elf32_get_ehdr(elf);
-			if (gOptions.show_elf_header) {
-				elf32_dump_ehdr(pEhdr);
-			}
-			if (gOptions.show_section_header) {
-				elf32_dump_shdr(pEhdr, zeus_elf32_get_shdr(elf));
-			}
-			if (gOptions.show_program_header) {
-				if (gOptions.show_program_index == -1) {
-					elf32_dump_phdr(pEhdr, zeus_elf32_get_phdr(elf));
-				} else {
-					elf32_dump_phdr_with_index(pEhdr, zeus_elf32_get_phdr(elf), gOptions.show_program_index);
-				}
+			switch (zeus_elf_class(file)) {
+			case ELFCLASS32:
+				process_elf32(elf);
+				break;
+			case ELFCLASS64:
+				process_elf64(elf);
+				break;
 			}
 		}
 		zeus_elf_close(elf);
